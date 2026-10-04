@@ -1,1 +1,1 @@
-# iac-vs-cm
+# Infrastructure as Code vs Configuration Management
