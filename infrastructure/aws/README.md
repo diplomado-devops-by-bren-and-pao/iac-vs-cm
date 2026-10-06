@@ -1,46 +1,47 @@
 # AWS — Terraform Lab
 
-Esta guía contiene la implementación completa de la infraestructura AWS del laboratorio. Los archivos Terraform del directorio son deliberadamente vacíos: **crea cada archivo y copia el bloque indicado en el paso correspondiente**.
+Guía completa de implementación de Saludos App en AWS.
 
-## Objetivo
+> Los archivos de implementación pueden estar deliberadamente vacíos. El estudiante crea cada archivo y copia el bloque indicado en el paso correspondiente.
 
-Construir la infraestructura de la Saludos App usando dos estrategias de reutilización:
+## 1. Objetivo
 
-- **Networking:** módulo propio construido recurso por recurso con recursos nativos de AWS.
-- **Compute y Database:** consumo directo de módulos publicados desde el módulo raíz.
+- **Networking:** módulo propio, sin módulos internos, usando recursos `aws_*` directamente.
+- **Compute / Database:** módulos publicados consumidos desde el root.
+- Uso de `for_each` para colecciones.
+- Asociaciones derivadas cuando la relación puede determinarse desde la propia configuración.
 
-## Arquitectura
+## 2. Arquitectura
 
 ```text
-ROOT
-├── networking → módulo propio → VPC, subnets, IGW, NAT, routing, SG
-├── compute    → módulo publicado → EC2
-└── database   → módulo publicado → RDS PostgreSQL
+VPC 10.0.0.0/24
+├── Public Subnet
+│   └── Frontend EC2
+└── Private Subnet
+    ├── Backend EC2
+    └── RDS PostgreSQL
+
+Internet Gateway
+NAT Gateway
+Route Tables
+Security Groups
 ```
 
-# 4. AWS — IMPLEMENTACIÓN COMPLETA
-
-## 4.1 Crear bucket para Remote State
-
-En `us-east-1`:
+## 3. Remote State
 
 ```bash
-aws s3api create-bucket \
-  --bucket saludos-terraform-state-123456 \
-  --region us-east-1
-
-aws s3api put-bucket-versioning \
-  --bucket saludos-terraform-state-123456 \
-  --versioning-configuration Status=Enabled
-
-aws s3api put-public-access-block \
-  --bucket saludos-terraform-state-123456 \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+aws s3api create-bucket   --bucket saludos-terraform-state-123456   --region us-east-1
 ```
 
-El bucket debe tener un nombre globalmente único. Si cambias el nombre, actualízalo también en `backend.tf`.
+```bash
+aws s3api put-bucket-versioning   --bucket saludos-terraform-state-123456   --versioning-configuration Status=Enabled
+```
 
-## 4.2 Crear `backend.tf`
+```bash
+aws s3api put-public-access-block   --bucket saludos-terraform-state-123456   --public-access-block-configuration   BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+## 4. `backend.tf`
 
 ```hcl
 terraform {
@@ -54,7 +55,9 @@ terraform {
 }
 ```
 
-## 4.3 Crear `versions.tf`
+## 5. Versiones y Provider
+
+`versions.tf`:
 
 ```hcl
 terraform {
@@ -63,21 +66,29 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 6.0"
+      version = "~> 5.0"
     }
   }
 }
 ```
 
-## 4.4 Crear `provider.tf`
+`provider.tf`:
 
 ```hcl
 provider "aws" {
-  region = var.aws_region
+  region = var.region
 }
 ```
 
-## 4.5 Crear `variables.tf`
+Validación:
+
+```bash
+aws sts get-caller-identity
+```
+
+## 6. Variables
+
+`variables.tf`:
 
 ```hcl
 variable "project_name" {
@@ -85,23 +96,29 @@ variable "project_name" {
   default = "saludos"
 }
 
-variable "aws_region" {
+variable "region" {
   type    = string
   default = "us-east-1"
 }
 
-variable "ubuntu_ami" {
-  type        = string
-  description = "Ubuntu 22.04 AMI for us-east-1."
-}
-
-variable "admin_username" {
+variable "vpc_cidr" {
   type    = string
-  default = "ubuntu"
+  default = "10.0.0.0/24"
 }
 
-variable "ssh_public_key_path" {
-  type = string
+variable "public_subnet_cidr" {
+  type    = string
+  default = "10.0.0.0/25"
+}
+
+variable "private_subnet_cidr" {
+  type    = string
+  default = "10.0.0.128/25"
+}
+
+variable "availability_zone" {
+  type    = string
+  default = "us-east-1a"
 }
 
 variable "db_username" {
@@ -113,26 +130,74 @@ variable "db_password" {
   type      = string
   sensitive = true
 }
+
+variable "db_name" {
+  type    = string
+  default = "saludosdb"
+}
+
+variable "key_name" {
+  type = string
+}
 ```
 
-## 4.6 Construir el módulo propio de Networking AWS
+## 7. Módulo propio de Networking
 
-### `modules/networking/variables.tf`
+Estructura:
+
+```text
+infrastructure/aws/modules/networking/
+├── main.tf
+├── variables.tf
+└── outputs.tf
+```
+
+No debe contener ningún `module` block.
+
+## 8. `modules/networking/variables.tf`
 
 ```hcl
-variable "project_name" { type = string }
-variable "vpc_cidr" { type = string }
-variable "public_cidr" { type = string }
-variable "public_cidr_2" { type = string }
-variable "private_cidr" { type = string }
-variable "private_cidr_2" { type = string }
-variable "availability_zone" { type = string }
-variable "availability_zone_2" { type = string }
+variable "project_name" {
+  type = string
+}
+
+variable "region" {
+  type = string
+}
+
+variable "vpc_cidr" {
+  type = string
+}
+
+variable "subnets" {
+  type = map(object({
+    cidr_block        = string
+    availability_zone = string
+    public            = bool
+  }))
+}
+
+variable "security_groups" {
+  type = map(object({
+    description = string
+  }))
+}
+
+variable "security_group_rules" {
+  type = map(object({
+    security_group = string
+    type           = string
+    protocol       = string
+    from_port      = number
+    to_port        = number
+    cidr_blocks    = list(string)
+  }))
+}
 ```
 
-### `modules/networking/main.tf`
+## 9. `modules/networking/main.tf`
 
-> Igual que en Azure: recursos AWS directos.
+### VPC
 
 ```hcl
 resource "aws_vpc" "main" {
@@ -140,55 +205,44 @@ resource "aws_vpc" "main" {
   enable_dns_support   = true
   enable_dns_hostnames = true
 
-  tags = { Name = "${var.project_name}-vpc" }
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
 }
+```
 
+### Subnets con `for_each`
+
+```hcl
+resource "aws_subnet" "main" {
+  for_each = var.subnets
+
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = each.value.cidr_block
+  availability_zone       = each.value.availability_zone
+  map_public_ip_on_launch = each.value.public
+
+  tags = {
+    Name = "${var.project_name}-${each.key}-subnet"
+  }
+}
+```
+
+### Internet Gateway
+
+```hcl
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "${var.project_name}-igw" }
-}
 
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_cidr
-  availability_zone       = var.availability_zone
-  map_public_ip_on_launch = true
-  tags = { Name = "${var.project_name}-public-a" }
+  tags = {
+    Name = "${var.project_name}-igw"
+  }
 }
+```
 
-resource "aws_subnet" "public_2" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_cidr_2
-  availability_zone       = var.availability_zone_2
-  map_public_ip_on_launch = true
-  tags = { Name = "${var.project_name}-public-b" }
-}
+### Route Tables
 
-resource "aws_subnet" "private" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.private_cidr
-  availability_zone = var.availability_zone
-  tags = { Name = "${var.project_name}-private-a" }
-}
-
-resource "aws_subnet" "private_2" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.private_cidr_2
-  availability_zone = var.availability_zone_2
-  tags = { Name = "${var.project_name}-private-b" }
-}
-
-resource "aws_eip" "nat" {
-  domain = "vpc"
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public.id
-  depends_on    = [aws_internet_gateway.main]
-  tags = { Name = "${var.project_name}-nat" }
-}
-
+```hcl
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
 
@@ -197,224 +251,371 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.main.id
   }
 
-  tags = { Name = "${var.project_name}-public-rt" }
-}
-
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
-}
-
-resource "aws_route_table_association" "public_2" {
-  subnet_id      = aws_subnet.public_2.id
-  route_table_id = aws_route_table.public.id
+  tags = {
+    Name = "${var.project_name}-public-rt"
+  }
 }
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
 
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
+  tags = {
+    Name = "${var.project_name}-private-rt"
+  }
+}
+```
+
+### NAT Gateway
+
+```hcl
+resource "aws_eip" "nat" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-nat-eip"
+  }
+}
+
+resource "aws_nat_gateway" "main" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.main["public"].id
+
+  tags = {
+    Name = "${var.project_name}-nat"
   }
 
-  tags = { Name = "${var.project_name}-private-rt" }
+  depends_on = [
+    aws_internet_gateway.main
+  ]
+}
+```
+
+### Ruta privada hacia NAT
+
+```hcl
+resource "aws_route" "private_default" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main.id
+}
+```
+
+### Asociaciones de route tables
+
+```hcl
+resource "aws_route_table_association" "public" {
+  subnet_id      = aws_subnet.main["public"].id
+  route_table_id = aws_route_table.public.id
 }
 
 resource "aws_route_table_association" "private" {
-  subnet_id      = aws_subnet.private.id
+  subnet_id      = aws_subnet.main["private"].id
   route_table_id = aws_route_table.private.id
-}
-
-resource "aws_route_table_association" "private_2" {
-  subnet_id      = aws_subnet.private_2.id
-  route_table_id = aws_route_table.private.id
-}
-
-resource "aws_security_group" "frontend" {
-  name        = "${var.project_name}-frontend-sg"
-  description = "Frontend access"
-  vpc_id      = aws_vpc.main.id
-
-  tags = { Name = "${var.project_name}-frontend-sg" }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "frontend_http" {
-  security_group_id = aws_security_group.frontend.id
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 80
-  to_port           = 80
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "frontend_ssh" {
-  security_group_id = aws_security_group.frontend.id
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 22
-  to_port           = 22
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_egress_rule" "frontend_all" {
-  security_group_id = aws_security_group.frontend.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-}
-
-resource "aws_security_group" "backend" {
-  name        = "${var.project_name}-backend-sg"
-  description = "Backend access"
-  vpc_id      = aws_vpc.main.id
-  tags = { Name = "${var.project_name}-backend-sg" }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "backend_api" {
-  security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = var.vpc_cidr
-  from_port         = 8080
-  to_port           = 8080
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_ingress_rule" "backend_ssh" {
-  security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = var.vpc_cidr
-  from_port         = 22
-  to_port           = 22
-  ip_protocol       = "tcp"
-}
-
-resource "aws_vpc_security_group_egress_rule" "backend_all" {
-  security_group_id = aws_security_group.backend.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
-}
-
-resource "aws_security_group" "database" {
-  name        = "${var.project_name}-database-sg"
-  description = "Database access"
-  vpc_id      = aws_vpc.main.id
-  tags = { Name = "${var.project_name}-database-sg" }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "database_postgres" {
-  security_group_id            = aws_security_group.database.id
-  referenced_security_group_id = aws_security_group.backend.id
-  from_port                    = 5432
-  to_port                      = 5432
-  ip_protocol                  = "tcp"
-}
-
-resource "aws_vpc_security_group_egress_rule" "database_all" {
-  security_group_id = aws_security_group.database.id
-  cidr_ipv4         = "0.0.0.0/0"
-  ip_protocol       = "-1"
 }
 ```
 
-### `modules/networking/outputs.tf`
+No se crea una variable adicional de asociaciones porque en este diseño la relación es fija:
+
+```text
+public  → public route table
+private → private route table
+```
+
+### Security Groups con `for_each`
 
 ```hcl
-output "vpc_id" { value = aws_vpc.main.id }
-output "public_subnet_ids" { value = [aws_subnet.public.id, aws_subnet.public_2.id] }
-output "private_subnet_ids" { value = [aws_subnet.private.id, aws_subnet.private_2.id] }
-output "frontend_sg_id" { value = aws_security_group.frontend.id }
-output "backend_sg_id" { value = aws_security_group.backend.id }
-output "database_sg_id" { value = aws_security_group.database.id }
+resource "aws_security_group" "main" {
+  for_each = var.security_groups
+
+  name        = "${var.project_name}-${each.key}-sg"
+  description = each.value.description
+  vpc_id      = aws_vpc.main.id
+
+  tags = {
+    Name = "${var.project_name}-${each.key}-sg"
+  }
+}
 ```
 
-## 4.7 Consumir el módulo propio desde `network.tf`
+### Reglas de ingreso
+
+```hcl
+resource "aws_vpc_security_group_ingress_rule" "main" {
+  for_each = {
+    for key, rule in var.security_group_rules :
+    key => rule
+    if rule.type == "ingress"
+  }
+
+  security_group_id = aws_security_group.main[each.value.security_group].id
+  cidr_ipv4         = each.value.cidr_blocks[0]
+  from_port         = each.value.from_port
+  to_port           = each.value.to_port
+  ip_protocol       = each.value.protocol
+}
+```
+
+### Reglas de salida
+
+```hcl
+resource "aws_vpc_security_group_egress_rule" "main" {
+  for_each = {
+    for key, rule in var.security_group_rules :
+    key => rule
+    if rule.type == "egress"
+  }
+
+  security_group_id = aws_security_group.main[each.value.security_group].id
+  cidr_ipv4         = each.value.cidr_blocks[0]
+  from_port         = each.value.from_port
+  to_port           = each.value.to_port
+  ip_protocol       = each.value.protocol
+}
+```
+
+## 10. Outputs
+
+`modules/networking/outputs.tf`:
+
+```hcl
+output "vpc_id" {
+  value = aws_vpc.main.id
+}
+
+output "subnet_ids" {
+  value = {
+    for key, subnet in aws_subnet.main :
+    key => subnet.id
+  }
+}
+
+output "security_group_ids" {
+  value = {
+    for key, sg in aws_security_group.main :
+    key => sg.id
+  }
+}
+```
+
+## 11. Consumir Networking desde el Root
+
+`network.tf`:
 
 ```hcl
 module "networking" {
   source = "./modules/networking"
 
-  project_name       = var.project_name
-  vpc_cidr           = "10.0.0.0/24"
-  public_cidr        = "10.0.0.0/26"
-  public_cidr_2      = "10.0.0.64/26"
-  private_cidr       = "10.0.0.128/26"
-  private_cidr_2     = "10.0.0.192/26"
-  availability_zone  = "${var.aws_region}a"
-  availability_zone_2 = "${var.aws_region}b"
+  project_name = var.project_name
+  region       = var.region
+  vpc_cidr     = var.vpc_cidr
+
+  subnets = {
+    public = {
+      cidr_block        = var.public_subnet_cidr
+      availability_zone = var.availability_zone
+      public            = true
+    }
+
+    private = {
+      cidr_block        = var.private_subnet_cidr
+      availability_zone = var.availability_zone
+      public            = false
+    }
+  }
+
+  security_groups = {
+    frontend = {
+      description = "Frontend security group"
+    }
+
+    backend = {
+      description = "Backend security group"
+    }
+
+    database = {
+      description = "Database security group"
+    }
+  }
+
+  security_group_rules = {
+    frontend_http = {
+      security_group = "frontend"
+      type           = "ingress"
+      protocol       = "tcp"
+      from_port      = 80
+      to_port        = 80
+      cidr_blocks    = ["0.0.0.0/0"]
+    }
+
+    frontend_ssh = {
+      security_group = "frontend"
+      type           = "ingress"
+      protocol       = "tcp"
+      from_port      = 22
+      to_port        = 22
+      cidr_blocks    = ["0.0.0.0/0"]
+    }
+
+    backend_api = {
+      security_group = "backend"
+      type           = "ingress"
+      protocol       = "tcp"
+      from_port      = 8080
+      to_port        = 8080
+      cidr_blocks    = [var.vpc_cidr]
+    }
+
+    backend_ssh = {
+      security_group = "backend"
+      type           = "ingress"
+      protocol       = "tcp"
+      from_port      = 22
+      to_port        = 22
+      cidr_blocks    = [var.vpc_cidr]
+    }
+
+    database_postgres = {
+      security_group = "database"
+      type           = "ingress"
+      protocol       = "tcp"
+      from_port      = 5432
+      to_port        = 5432
+      cidr_blocks    = [var.private_subnet_cidr]
+    }
+  }
 }
 ```
 
-## 4.8 Validar Networking AWS
+## 12. Validar Networking
 
 ```bash
 cd infrastructure/aws
 terraform fmt -recursive
+terraform init
 terraform validate
 terraform plan
 ```
 
-## 4.9 Frontend y Backend mediante módulo publicado
+## 13. AMI Ubuntu
+
+`data.tf`:
+
+```hcl
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"]
+
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+```
+
+## 14. Frontend EC2 con módulo publicado
 
 `compute.tf`:
 
 ```hcl
 module "frontend" {
   source  = "terraform-aws-modules/ec2-instance/aws"
-  version = "6.4.1"
+  version = "~> 6.0"
 
-  name                        = "${var.project_name}-frontend"
-  ami                         = var.ubuntu_ami
-  instance_type               = "t3.micro"
-  subnet_id                   = module.networking.public_subnet_ids[0]
-  vpc_security_group_ids     = [module.networking.frontend_sg_id]
-  associate_public_ip_address = true
-  key_name                    = null
-}
+  name = "${var.project_name}-frontend"
 
-module "backend" {
-  source  = "terraform-aws-modules/ec2-instance/aws"
-  version = "6.4.1"
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
 
-  name                    = "${var.project_name}-backend"
-  ami                     = var.ubuntu_ami
-  instance_type           = "t3.micro"
-  subnet_id               = module.networking.private_subnet_ids[0]
-  vpc_security_group_ids = [module.networking.backend_sg_id]
-  associate_public_ip_address = false
+  subnet_id = module.networking.subnet_ids["public"]
+
+  vpc_security_group_ids = [
+    module.networking.security_group_ids["frontend"]
+  ]
+
+  key_name = var.key_name
+
+  tags = {
+    Name = "${var.project_name}-frontend"
+  }
 }
 ```
 
-> Para acceso SSH a las EC2 debes configurar una clave de acceso de AWS en tu cuenta/región y asociarla según la configuración que uses. En un laboratorio guiado, también puedes utilizar Session Manager si tu AMI y permisos están preparados para ello.
+## 15. Backend EC2
 
-## 4.10 PostgreSQL mediante módulo publicado
+```hcl
+module "backend" {
+  source  = "terraform-aws-modules/ec2-instance/aws"
+  version = "~> 6.0"
+
+  name = "${var.project_name}-backend"
+
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
+
+  subnet_id = module.networking.subnet_ids["private"]
+
+  vpc_security_group_ids = [
+    module.networking.security_group_ids["backend"]
+  ]
+
+  key_name = var.key_name
+
+  tags = {
+    Name = "${var.project_name}-backend"
+  }
+}
+```
+
+## 16. PostgreSQL RDS con módulo publicado
 
 `database.tf`:
 
 ```hcl
 module "postgresql" {
   source  = "terraform-aws-modules/rds/aws"
-  version = "7.2.1"
+  version = "~> 6.0"
 
   identifier = "${var.project_name}-postgres"
 
   engine               = "postgres"
   engine_version       = "16"
+  family               = "postgres16"
+  major_engine_version = "16"
   instance_class       = "db.t3.micro"
-  allocated_storage    = 20
-  max_allocated_storage = 50
 
-  db_name  = "saludosdb"
+  allocated_storage = 20
+
+  db_name  = var.db_name
   username = var.db_username
   password = var.db_password
   port     = 5432
 
   create_db_subnet_group = true
-  subnet_ids              = module.networking.private_subnet_ids
-  publicly_accessible    = false
-  vpc_security_group_ids = [module.networking.database_sg_id]
+
+  subnet_ids = [
+    module.networking.subnet_ids["private"]
+  ]
+
+  vpc_security_group_ids = [
+    module.networking.security_group_ids["database"]
+  ]
+
+  publicly_accessible = false
 
   skip_final_snapshot = true
-  deletion_protection = false
+
+  tags = {
+    Name = "${var.project_name}-postgres"
+  }
 }
 ```
 
-## 4.11 Outputs AWS
+## 17. Outputs
 
 `outputs.tf`:
 
@@ -423,41 +624,58 @@ output "vpc_id" {
   value = module.networking.vpc_id
 }
 
+output "public_subnet_id" {
+  value = module.networking.subnet_ids["public"]
+}
+
+output "private_subnet_id" {
+  value = module.networking.subnet_ids["private"]
+}
+
+output "frontend_security_group_id" {
+  value = module.networking.security_group_ids["frontend"]
+}
+
+output "backend_security_group_id" {
+  value = module.networking.security_group_ids["backend"]
+}
+
+output "database_security_group_id" {
+  value = module.networking.security_group_ids["database"]
+}
+
 output "frontend_public_ip" {
   value = module.frontend.public_ip
 }
 
-output "frontend_public_dns" {
-  value = module.frontend.public_dns
-}
-
-output "backend_private_ip" {
-  value = module.backend.private_ip
-}
-
 output "database_endpoint" {
-  value     = module.postgresql.db_instance_endpoint
-  sensitive = true
+  value = module.postgresql.db_instance_endpoint
 }
 ```
 
-## 4.12 Variables AWS
-
-Crear `terraform.tfvars`:
+## 18. `terraform.tfvars`
 
 ```hcl
-project_name       = "saludos"
-aws_region         = "us-east-1"
-ubuntu_ami         = "REEMPLAZAR_CON_AMI_UBUNTU_22_04_DE_TU_REGION"
-admin_username     = "ubuntu"
-ssh_public_key_path = "~/.ssh/id_rsa.pub"
-db_username        = "saludosadmin"
-db_password        = "REEMPLAZAR_CON_UN_PASSWORD_SEGURO"
+project_name = "saludos"
+region       = "us-east-1"
+
+vpc_cidr            = "10.0.0.0/24"
+public_subnet_cidr  = "10.0.0.0/25"
+private_subnet_cidr = "10.0.0.128/25"
+
+availability_zone = "us-east-1a"
+
+db_username = "saludosadmin"
+db_password = "REEMPLAZAR_CON_UN_PASSWORD_SEGURO"
+db_name     = "saludosdb"
+
+key_name = "REEMPLAZAR_CON_TU_KEY_PAIR"
 ```
 
-## 4.13 Ejecutar Terraform AWS
+## 19. Flujo final
 
 ```bash
+terraform fmt -recursive
 terraform init
 terraform validate
 terraform plan
@@ -465,5 +683,28 @@ terraform apply
 terraform output
 ```
 
----
+Al finalizar:
 
+```bash
+terraform destroy
+```
+
+## 20. Resultado y comparación
+
+```text
+ROOT
+│
+├── Networking
+│   └── módulo propio
+│       └── aws_* directamente
+│
+├── EC2
+│   └── módulo publicado
+│
+└── RDS
+    └── módulo publicado
+```
+
+El objetivo es que el estudiante pueda explicar por qué el módulo propio de Networking es una implementación directa de recursos, mientras que Compute y Database consumen abstracciones ya publicadas.
+
+Configuration Management se implementará posteriormente sobre la infraestructura provisionada por Terraform.

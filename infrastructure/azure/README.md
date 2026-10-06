@@ -1,60 +1,59 @@
 # Azure — Terraform Lab
 
-Esta guía contiene la implementación completa de la infraestructura Azure del laboratorio. Los archivos Terraform del directorio son deliberadamente vacíos: **crea cada archivo y copia el bloque indicado en el paso correspondiente**.
+Guía completa de implementación de Saludos App en Azure.
 
-## Objetivo
+> Los archivos de implementación pueden estar deliberadamente vacíos. El estudiante crea cada archivo y copia el bloque indicado en el paso correspondiente.
 
-Construir la infraestructura de Saludos App usando dos estrategias de reutilización:
+## 1. Objetivo
 
-- **Networking:** módulo propio construido recurso por recurso con recursos nativos de Azure.
-- **Compute y Database:** consumo directo de módulos publicados/Azure Verified Modules desde el módulo raíz.
+Construir la infraestructura usando:
 
-## Arquitectura
+- **Networking:** módulo propio, sin módulos internos, usando recursos `azurerm_*` directamente.
+- **Compute / Database:** módulos publicados / Azure Verified Modules consumidos desde el módulo raíz.
+
+## 2. Arquitectura
 
 ```text
 ROOT
-├── networking → módulo propio → VNet, subnets, NSG, Private DNS
-├── compute    → módulo publicado/AVM → VMs
-└── database   → módulo publicado/AVM → PostgreSQL Flexible Server
+├── Resource Group
+├── networking → módulo propio
+│   ├── VNet
+│   ├── Subnets
+│   ├── NSGs
+│   ├── NSG Rules
+│   └── Private DNS
+├── frontend → AVM VM
+├── backend  → AVM VM
+└── postgresql → AVM PostgreSQL
 ```
 
-# 3. AZURE — IMPLEMENTACIÓN COMPLETA
+Red:
 
-## 3.1 Crear el Resource Group para el Remote State
+```text
+10.1.0.0/16
+├── GatewaySubnet  10.1.0.0/24
+├── Frontend        10.1.1.0/24 → frontend NSG
+├── Backend         10.1.2.0/24 → backend NSG
+└── Database        10.1.3.0/24 → PostgreSQL delegation
+```
 
-Antes de ejecutar `terraform init`, crea manualmente el almacenamiento que Terraform utilizará para su state.
+## 3. Remote State
 
 ```bash
-az group create \
-  --name terraform-state-rg \
-  --location EastUS
+az group create   --name terraform-state-rg   --location EastUS
 ```
-
-## 3.2 Crear Storage Account
-
-El nombre del Storage Account debe ser globalmente único. Si `stsaludostate123` ya existe, cambia el nombre y utiliza el mismo nombre en `backend.tf`.
 
 ```bash
-az storage account create \
-  --name stsaludostate123 \
-  --resource-group terraform-state-rg \
-  --location EastUS \
-  --sku Standard_LRS \
-  --kind StorageV2 \
-  --min-tls-version TLS1_2 \
-  --allow-blob-public-access false
+az storage account create   --name stsaludostate123   --resource-group terraform-state-rg   --location EastUS   --sku Standard_LRS   --kind StorageV2   --min-tls-version TLS1_2   --allow-blob-public-access false
 ```
-
-## 3.3 Crear el container del state
 
 ```bash
-az storage container create \
-  --name tfstate \
-  --account-name stsaludostate123 \
-  --auth-mode login
+az storage container create   --name tfstate   --account-name stsaludostate123   --auth-mode login
 ```
 
-## 3.4 Crear `infrastructure/azure/backend.tf`
+Si el Storage Account ya existe, cambia el nombre por uno globalmente único y úsalo también en el backend.
+
+## 4. `backend.tf`
 
 ```hcl
 terraform {
@@ -67,7 +66,7 @@ terraform {
 }
 ```
 
-## 3.5 Crear `versions.tf`
+## 5. `versions.tf`
 
 ```hcl
 terraform {
@@ -82,7 +81,7 @@ terraform {
 }
 ```
 
-## 3.6 Crear `provider.tf`
+## 6. `provider.tf`
 
 ```hcl
 provider "azurerm" {
@@ -90,7 +89,14 @@ provider "azurerm" {
 }
 ```
 
-## 3.7 Crear `variables.tf`
+Autenticación:
+
+```bash
+az login
+az account show
+```
+
+## 7. `variables.tf`
 
 ```hcl
 variable "project_name" {
@@ -102,12 +108,12 @@ variable "project_name" {
 variable "location" {
   type        = string
   description = "Azure region."
-  default     = "East US"
+  default     = "Central US"
 }
 
 variable "admin_username" {
-  type        = string
-  default     = "azureuser"
+  type    = string
+  default = "azureuser"
 }
 
 variable "ssh_public_key_path" {
@@ -116,8 +122,8 @@ variable "ssh_public_key_path" {
 }
 
 variable "db_admin_username" {
-  type      = string
-  default   = "saludosadmin"
+  type    = string
+  default = "saludosadmin"
 }
 
 variable "db_admin_password" {
@@ -131,24 +137,80 @@ variable "db_name" {
 }
 ```
 
-## 3.8 Crear el módulo propio de Networking
+## 8. Resource Group
+
+`network.tf`:
+
+```hcl
+resource "azurerm_resource_group" "main" {
+  name     = "${var.project_name}-rg"
+  location = var.location
+}
+```
+
+## 9. Módulo propio de Networking
+
+Estructura:
+
+```text
+infrastructure/azure/modules/networking/
+├── main.tf
+├── variables.tf
+└── outputs.tf
+```
+
+**El módulo no contiene ningún `module` block.**
 
 ### `modules/networking/variables.tf`
 
 ```hcl
-variable "project_name" { type = string }
-variable "location" { type = string }
-variable "resource_group_name" { type = string }
-variable "vnet_cidr" { type = string }
-variable "gateway_subnet_cidr" { type = string }
-variable "frontend_subnet_cidr" { type = string }
-variable "backend_subnet_cidr" { type = string }
-variable "database_subnet_cidr" { type = string }
+variable "project_name" {
+  type = string
+}
+
+variable "location" {
+  type = string
+}
+
+variable "resource_group_name" {
+  type = string
+}
+
+variable "vnet_cidr" {
+  type = string
+}
+
+variable "subnets" {
+  type = map(object({
+    name             = string
+    address_prefixes = list(string)
+    delegation       = optional(string)
+    nsg              = optional(string)
+  }))
+}
+
+variable "network_security_groups" {
+  type = map(object({
+    name = string
+  }))
+}
+
+variable "network_security_rules" {
+  type = map(object({
+    nsg_name                   = string
+    priority                   = number
+    direction                  = string
+    access                     = string
+    protocol                   = string
+    source_port_range          = string
+    destination_port_range     = string
+    source_address_prefix      = string
+    destination_address_prefix = string
+  }))
+}
 ```
 
 ### `modules/networking/main.tf`
-
-> Este es el punto clave del ejercicio: aquí solo existen recursos `azurerm_*`.
 
 ```hcl
 resource "azurerm_virtual_network" "main" {
@@ -158,121 +220,66 @@ resource "azurerm_virtual_network" "main" {
   address_space       = [var.vnet_cidr]
 }
 
-resource "azurerm_subnet" "gateway" {
-  name                 = "GatewaySubnet"
+resource "azurerm_subnet" "main" {
+  for_each = var.subnets
+
+  name                 = each.value.name
   resource_group_name  = var.resource_group_name
   virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.gateway_subnet_cidr]
-}
+  address_prefixes     = each.value.address_prefixes
 
-resource "azurerm_subnet" "frontend" {
-  name                 = "${var.project_name}-frontend-subnet"
-  resource_group_name  = var.resource_group_name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.frontend_subnet_cidr]
-}
+  dynamic "delegation" {
+    for_each = each.value.delegation != null ? [each.value.delegation] : []
 
-resource "azurerm_subnet" "backend" {
-  name                 = "${var.project_name}-backend-subnet"
-  resource_group_name  = var.resource_group_name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.backend_subnet_cidr]
-}
+    content {
+      name = "delegation"
 
-resource "azurerm_subnet" "database" {
-  name                 = "${var.project_name}-database-subnet"
-  resource_group_name  = var.resource_group_name
-  virtual_network_name = azurerm_virtual_network.main.name
-  address_prefixes     = [var.database_subnet_cidr]
-
-  delegation {
-    name = "postgres-flexible-server"
-
-    service_delegation {
-      name = "Microsoft.DBforPostgreSQL/flexibleServers"
-      actions = [
-        "Microsoft.Network/virtualNetworks/subnets/join/action"
-      ]
+      service_delegation {
+        name = delegation.value
+        actions = [
+          "Microsoft.Network/virtualNetworks/subnets/join/action"
+        ]
+      }
     }
   }
 }
 
-resource "azurerm_network_security_group" "frontend" {
-  name                = "${var.project_name}-frontend-nsg"
+resource "azurerm_network_security_group" "main" {
+  for_each = var.network_security_groups
+
+  name                = each.value.name
   location            = var.location
   resource_group_name = var.resource_group_name
 }
 
-resource "azurerm_network_security_rule" "frontend_http" {
-  name                        = "allow-http"
-  priority                    = 100
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "80"
-  source_address_prefix       = "*"
-  destination_address_prefix  = "*"
+resource "azurerm_network_security_rule" "main" {
+  for_each = var.network_security_rules
+
+  name                        = each.key
+  priority                    = each.value.priority
+  direction                   = each.value.direction
+  access                      = each.value.access
+  protocol                    = each.value.protocol
+  source_port_range           = each.value.source_port_range
+  destination_port_range      = each.value.destination_port_range
+  source_address_prefix       = each.value.source_address_prefix
+  destination_address_prefix = each.value.destination_address_prefix
   resource_group_name         = var.resource_group_name
-  network_security_group_name = azurerm_network_security_group.frontend.name
+  network_security_group_name = azurerm_network_security_group.main[each.value.nsg_name].name
 }
 
-resource "azurerm_network_security_rule" "frontend_ssh" {
-  name                        = "allow-ssh"
-  priority                    = 110
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "22"
-  source_address_prefix       = "*"
-  destination_address_prefix  = "*"
-  resource_group_name         = var.resource_group_name
-  network_security_group_name = azurerm_network_security_group.frontend.name
-}
+resource "azurerm_subnet_network_security_group_association" "main" {
+  for_each = {
+    for key, subnet in var.subnets :
+    key => subnet
+    if subnet.nsg != null
+  }
 
-resource "azurerm_network_security_group" "backend" {
-  name                = "${var.project_name}-backend-nsg"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-}
+  subnet_id = azurerm_subnet.main[each.key].id
 
-resource "azurerm_network_security_rule" "backend_api" {
-  name                        = "allow-api-from-vnet"
-  priority                    = 100
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "8080"
-  source_address_prefix      = var.vnet_cidr
-  destination_address_prefix = "*"
-  resource_group_name         = var.resource_group_name
-  network_security_group_name = azurerm_network_security_group.backend.name
-}
-
-resource "azurerm_network_security_rule" "backend_ssh" {
-  name                        = "allow-ssh"
-  priority                    = 110
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "Tcp"
-  source_port_range           = "*"
-  destination_port_range      = "22"
-  source_address_prefix       = "*"
-  destination_address_prefix = "*"
-  resource_group_name         = var.resource_group_name
-  network_security_group_name = azurerm_network_security_group.backend.name
-}
-
-resource "azurerm_subnet_network_security_group_association" "frontend" {
-  subnet_id                 = azurerm_subnet.frontend.id
-  network_security_group_id = azurerm_network_security_group.frontend.id
-}
-
-resource "azurerm_subnet_network_security_group_association" "backend" {
-  subnet_id                 = azurerm_subnet.backend.id
-  network_security_group_id = azurerm_network_security_group.backend.id
+  network_security_group_id = (
+    azurerm_network_security_group.main[each.value.nsg].id
+  )
 }
 
 resource "azurerm_private_dns_zone" "postgres" {
@@ -291,49 +298,154 @@ resource "azurerm_private_dns_zone_virtual_network_link" "postgres" {
 ### `modules/networking/outputs.tf`
 
 ```hcl
-output "vnet_id" { value = azurerm_virtual_network.main.id }
-output "frontend_subnet_id" { value = azurerm_subnet.frontend.id }
-output "backend_subnet_id" { value = azurerm_subnet.backend.id }
-output "database_subnet_id" { value = azurerm_subnet.database.id }
-output "frontend_nsg_id" { value = azurerm_network_security_group.frontend.id }
-output "backend_nsg_id" { value = azurerm_network_security_group.backend.id }
-output "postgres_private_dns_zone_id" { value = azurerm_private_dns_zone.postgres.id }
-```
-
-## 3.9 Llamar al módulo propio desde `network.tf`
-
-```hcl
-resource "azurerm_resource_group" "main" {
-  name     = "${var.project_name}-rg"
-  location = var.location
+output "vnet_id" {
+  value = azurerm_virtual_network.main.id
 }
 
+output "subnet_ids" {
+  value = {
+    for key, subnet in azurerm_subnet.main :
+    key => subnet.id
+  }
+}
+
+output "network_security_group_ids" {
+  value = {
+    for key, nsg in azurerm_network_security_group.main :
+    key => nsg.id
+  }
+}
+
+output "postgres_private_dns_zone_id" {
+  value = azurerm_private_dns_zone.postgres.id
+}
+```
+
+## 10. Consumir Networking desde el Root
+
+En `network.tf`:
+
+```hcl
 module "networking" {
   source = "./modules/networking"
 
-  project_name           = var.project_name
-  location               = var.location
-  resource_group_name    = azurerm_resource_group.main.name
-  vnet_cidr              = "10.1.0.0/16"
-  gateway_subnet_cidr    = "10.1.0.0/24"
-  frontend_subnet_cidr   = "10.1.1.0/24"
-  backend_subnet_cidr    = "10.1.2.0/24"
-  database_subnet_cidr   = "10.1.3.0/24"
+  project_name        = var.project_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.main.name
+  vnet_cidr           = "10.1.0.0/16"
+
+  subnets = {
+    gateway = {
+      name             = "GatewaySubnet"
+      address_prefixes = ["10.1.0.0/24"]
+      nsg              = null
+    }
+
+    frontend = {
+      name             = "${var.project_name}-frontend-subnet"
+      address_prefixes = ["10.1.1.0/24"]
+      nsg              = "frontend"
+    }
+
+    backend = {
+      name             = "${var.project_name}-backend-subnet"
+      address_prefixes = ["10.1.2.0/24"]
+      nsg              = "backend"
+    }
+
+    database = {
+      name             = "${var.project_name}-database-subnet"
+      address_prefixes = ["10.1.3.0/24"]
+      delegation       = "Microsoft.DBforPostgreSQL/flexibleServers"
+      nsg              = null
+    }
+  }
+
+  network_security_groups = {
+    frontend = {
+      name = "${var.project_name}-frontend-nsg"
+    }
+
+    backend = {
+      name = "${var.project_name}-backend-nsg"
+    }
+  }
+
+  network_security_rules = {
+    frontend_http = {
+      nsg_name                   = "frontend"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "80"
+      source_address_prefix      = "*"
+      destination_address_prefix = "*"
+    }
+
+    frontend_ssh = {
+      nsg_name                   = "frontend"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "22"
+      source_address_prefix      = "*"
+      destination_address_prefix = "*"
+    }
+
+    backend_api = {
+      nsg_name                   = "backend"
+      priority                   = 100
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "8080"
+      source_address_prefix      = "10.1.0.0/16"
+      destination_address_prefix = "*"
+    }
+
+    backend_ssh = {
+      nsg_name                   = "backend"
+      priority                   = 110
+      direction                  = "Inbound"
+      access                     = "Allow"
+      protocol                   = "Tcp"
+      source_port_range          = "*"
+      destination_port_range     = "22"
+      source_address_prefix      = "*"
+      destination_address_prefix = "*"
+    }
+  }
 }
 ```
 
-## 3.10 Validar Networking
+La asociación subnet/NSG **no se pasa desde el root**. Se deriva automáticamente del atributo `nsg` de cada subnet.
+
+## 11. Validar Networking
 
 ```bash
 cd infrastructure/azure
 terraform fmt -recursive
+terraform init
 terraform validate
 terraform plan
 ```
 
-Un solo `module "networking"` en el root representa muchos recursos reales.
+El plan debe incluir:
 
-## 3.11 Crear la VM Frontend con un módulo AVM
+- 1 VNet.
+- 4 subnets.
+- 2 NSG.
+- 4 reglas.
+- 2 asociaciones subnet/NSG.
+- 1 Private DNS Zone.
+- 1 VNet link.
+
+## 12. Frontend con AVM
 
 `compute.tf`:
 
@@ -347,6 +459,8 @@ module "frontend" {
   resource_group_name = azurerm_resource_group.main.name
   os_type             = "Linux"
   sku_size            = "Standard_B2s"
+  zone                = "1"
+  encryption_at_host_enabled = false
 
   source_image_reference = {
     publisher = "Canonical"
@@ -357,8 +471,8 @@ module "frontend" {
 
   account_credentials = {
     admin_credentials = {
-      username                          = var.admin_username
-      ssh_keys                          = [file(pathexpand(var.ssh_public_key_path))]
+      username                           = var.admin_username
+      ssh_keys                           = [file(pathexpand(var.ssh_public_key_path))]
       generate_admin_password_or_ssh_key = false
     }
   }
@@ -370,7 +484,7 @@ module "frontend" {
       ip_configurations = {
         primary = {
           name                          = "primary"
-          private_ip_subnet_resource_id = module.networking.frontend_subnet_id
+          private_ip_subnet_resource_id = module.networking.subnet_ids["frontend"]
           create_public_ip_address      = true
           public_ip_address_name        = "${var.project_name}-frontend-pip"
         }
@@ -380,7 +494,11 @@ module "frontend" {
 
   custom_data = filebase64("../../cloud-init/azure/frontend-docker.yaml")
 }
+```
 
+## 13. Backend con AVM
+
+```hcl
 module "backend" {
   source  = "Azure/avm-res-compute-virtualmachine/azurerm"
   version = "0.21.0"
@@ -390,6 +508,8 @@ module "backend" {
   resource_group_name = azurerm_resource_group.main.name
   os_type             = "Linux"
   sku_size            = "Standard_B2s"
+  zone                = "1"
+  encryption_at_host_enabled = false
 
   source_image_reference = {
     publisher = "Canonical"
@@ -400,8 +520,8 @@ module "backend" {
 
   account_credentials = {
     admin_credentials = {
-      username                          = var.admin_username
-      ssh_keys                          = [file(pathexpand(var.ssh_public_key_path))]
+      username                           = var.admin_username
+      ssh_keys                           = [file(pathexpand(var.ssh_public_key_path))]
       generate_admin_password_or_ssh_key = false
     }
   }
@@ -413,7 +533,7 @@ module "backend" {
       ip_configurations = {
         primary = {
           name                          = "primary"
-          private_ip_subnet_resource_id = module.networking.backend_subnet_id
+          private_ip_subnet_resource_id = module.networking.subnet_ids["backend"]
           create_public_ip_address      = false
         }
       }
@@ -422,9 +542,7 @@ module "backend" {
 }
 ```
 
-> Cloud-Init se utiliza solo en Frontend.
-
-## 3.12 Crear PostgreSQL Flexible Server con AVM
+## 14. PostgreSQL con AVM
 
 `database.tf`:
 
@@ -439,9 +557,11 @@ module "postgresql" {
 
   administrator_login    = var.db_admin_username
   administrator_password = var.db_admin_password
-  server_version        = "16"
-  delegated_subnet_id   = module.networking.database_subnet_id
-  private_dns_zone_id   = module.networking.postgres_private_dns_zone_id
+  server_version         = "16"
+
+  delegated_subnet_id = module.networking.subnet_ids["database"]
+  private_dns_zone_id = module.networking.postgres_private_dns_zone_id
+
   public_network_access_enabled = false
 
   databases = {
@@ -451,10 +571,11 @@ module "postgresql" {
   }
 
   sku_name = "B_Standard_B1ms"
+  high_availability = null
 }
 ```
 
-## 3.13 Outputs Azure
+## 15. Outputs
 
 `outputs.tf`:
 
@@ -463,12 +584,25 @@ output "vnet_id" {
   value = module.networking.vnet_id
 }
 
-output "frontend_public_ip" {
-  value = try(module.frontend.resource_public_ip_addresses["${var.project_name}-frontend-pip"], null)
+output "frontend_subnet_id" {
+  value = module.networking.subnet_ids["frontend"]
+}
+
+output "backend_subnet_id" {
+  value = module.networking.subnet_ids["backend"]
 }
 
 output "database_subnet_id" {
-  value = module.networking.database_subnet_id
+  value = module.networking.subnet_ids["database"]
+}
+
+output "frontend_public_ip" {
+  value = try(
+    module.frontend.resource_public_ip_addresses[
+      "${var.project_name}-frontend-pip"
+    ],
+    null
+  )
 }
 
 output "database_private_dns_zone_id" {
@@ -476,23 +610,23 @@ output "database_private_dns_zone_id" {
 }
 ```
 
-## 3.14 Variables de Azure
-
-`terraform.tfvars` (crear copiando el ejemplo):
+## 16. `terraform.tfvars`
 
 ```hcl
 project_name        = "saludos"
 location            = "East US"
 admin_username      = "azureuser"
-ssh_public_key_path = "~/.ssh/id_rsa.pub"
-db_admin_username   = "saludosadmin"
-db_admin_password   = "REEMPLAZAR_CON_UN_PASSWORD_SEGURO"
-db_name             = "saludosdb"
+ssh_public_key_path = "PATH_KEY_PUBLICA"
+
+db_admin_username = "saludosadmin"
+db_admin_password = "REEMPLAZAR_CON_UN_PASSWORD_SEGURO"
+db_name           = "saludosdb"
 ```
 
-## 3.15 Ejecutar Terraform en Azure
+## 17. Flujo final
 
 ```bash
+terraform fmt -recursive
 terraform init
 terraform validate
 terraform plan
@@ -500,34 +634,40 @@ terraform apply
 terraform output
 ```
 
-## 3.16 Demostración Cloud-Init
+Al terminar:
 
-Crear `cloud-init/azure/frontend-docker.yaml`:
+```bash
+terraform destroy
+```
+
+## 18. Cloud-Init
+
+`cloud-init/azure/frontend-docker.yaml`:
 
 ```yaml
 #cloud-config
+
 package_update: true
+
 packages:
   - docker.io
+
 runcmd:
   - systemctl enable docker
   - systemctl start docker
 ```
 
-Después de `apply`, conecta a la VM Frontend y comprueba:
+El frontend recibe el archivo con:
 
-```bash
-docker --version
-systemctl status docker
+```hcl
+custom_data = filebase64("../../cloud-init/azure/frontend-docker.yaml")
 ```
 
-La enseñanza aquí es:
+La comparación conceptual queda:
 
 ```text
-Terraform = crea la VM
-Cloud-Init = bootstrap del primer arranque
-Ansible = configuración repetible / Configuration Management
+Terraform → provisiona la VM
+Cloud-Init → configuración inicial
+Ansible → Configuration Management posterior
 ```
-
----
 
