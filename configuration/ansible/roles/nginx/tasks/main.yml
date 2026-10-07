@@ -1,0 +1,21 @@
+---
+- name: Instalar nginx
+  ansible.builtin.dnf:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Agregar configuracion de nginx 
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/nginx.conf
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reiniciar nginx
+
+- name: Asegurar que nginx este instalado
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
