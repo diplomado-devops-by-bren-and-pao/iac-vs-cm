@@ -1,10 +1,10 @@
 # Saludos App — Workshop Module 6.2
 
-Laboratorio práctico de **Terraform + Configuration Management** para la Saludos App.
+Laboratorio práctico de **IaC con Terrafom + CM con Ansible para la Saludos App.
 
 ## Objetivo
 
-Provisionar infraestructura reproducible en Azure y AWS y dejar preparada la transición hacia Configuration Management.
+Provisionar infraestructura reproducible en Azure y AWS usando Terraform y configurar esta con Ansible.
 
 ## Estrategia del laboratorio
 
@@ -57,11 +57,76 @@ En `infrastructure/aws/README.md` se encuentra la guía completa para construir:
 
 ### Configuration Management
 
-La carpeta `configuration/ansible/` queda preparada como estructura para la segunda parte del módulo.
+La carpeta `configuration/ansible/` contiene dos tipos de laboratorios:
+
+#### Provisionamiento de infrastructura y su configuracion con Ansible
+
+El role ec2_aws agrega al inventario temporal el host que va a configurar
+
+```yaml
+- name: Crear infraestructura
+  hosts: localhost
+  roles:
+    - role: ec2_aws
+
+- name: Configuracion comun
+  hosts: infrastructure_with_ansible
+  become: true
+  tasks:
+    - name: Instalar paquetes base en Amazon Linux
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - git 
+          - unzip
+        state: present
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+```
+#### Despliegue de configuración sobre la infraestructura creada por Terraform
+
+Los archivos .ini declaran los inventarios por nube y por tipo de servicio
+
+```yaml
+- name: Configuracion comun
+  hosts: all
+  become: true
+  tasks:
+    - name: Instalar paquetes base en Amazon Linux
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - git 
+          - unzip
+        state: present
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+    
+    - name: Instalar paquetes base en Debian/Ubuntu
+      ansible.builtin.apt:
+        name:
+          - python3
+          - git 
+          - unzip
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+  roles:
+    - role: docker
+
+- name: Configurar nginx en los servidores frontend
+  hosts: frontend
+  become: true
+  roles:
+    - role: nginx
+      backend_host: 10.0.0.32
+```
 
 ## Prerrequisitos
 
 - Terraform
+- Ansible
 - AWS CLI
 - Azure CLI
 - Git
