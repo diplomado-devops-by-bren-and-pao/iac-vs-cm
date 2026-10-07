@@ -1,0 +1,6 @@
+---
+- name: Instalar nginx
+
+- name: Agregar configuracion de nginx
+
+- name: Asegurar que nginx este instalado

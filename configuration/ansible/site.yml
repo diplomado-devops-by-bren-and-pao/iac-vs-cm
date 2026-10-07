@@ -1,0 +1,40 @@
+---
+
+- name: Crear infrastructura
+  hosts: localhost
+  roles:
+    - role: ec2_aws
+
+- name: Configuracion comun
+  hosts: all
+  become: true
+  tasks:
+    - name: Instalar paquetes base en Amazon Linux
+      ansible.builtin.dnf:
+        name:
+          - python3
+          - git 
+          - unzip
+        state: present
+        update_cache: true
+      when: ansible_os_family == "RedHat"
+    
+    - name: Instalar paquetes base en Debian/Ubuntu
+      ansible.builtin.apt:
+        name:
+          - python3
+          - git 
+          - unzip
+        state: present
+        update_cache: true
+      when: ansible_os_family == "Debian"
+
+  roles:
+    - role: docker
+
+- name: Configurar nginx en los servidores frontend
+  hosts: frontend
+  become: true
+  roles:
+    - role: nginx
+      backend_host: 10.0.0.32
