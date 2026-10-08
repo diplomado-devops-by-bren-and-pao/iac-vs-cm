@@ -61,6 +61,6 @@
     port: 22
     timeout: 500
 
-- name: Esperar para que pueda configurarse
-  ansible.builtin.wait_for:
-    timeout: 300
+# - name: Esperar para que pueda configurarse
+#   ansible.builtin.wait_for:
+#     timeout: 300

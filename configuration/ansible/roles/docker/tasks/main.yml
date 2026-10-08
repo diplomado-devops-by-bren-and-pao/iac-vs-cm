@@ -1,1 +1,20 @@
 ---
+- name: Instalar Docker en Debian/Ubuntu
+  ansible.builtin.apt:
+    name: docker.io
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: Instalar Docker en Amazon Linux
+  ansible.builtin.dnf:
+    name: docker
+    state: present
+    update_cache: true
+  when: ansible_os_family == "RedHat"
+
+- name: Asegurar que Docker está habilitado
+  ansible.builtin.service:
+    name: docker
+    state: started
+    enabled: true

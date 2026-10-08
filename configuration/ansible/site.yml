@@ -1,9 +1,9 @@
 ---
 
-- name: Crear infrastructura
-  hosts: localhost
-  roles:
-    - role: ec2_aws
+# - name: Crear infrastructura
+#   hosts: localhost
+#   roles:
+#     - role: ec2_aws
 
 - name: Configuracion comun
   hosts: all
